@@ -10,7 +10,25 @@
    xmlns="http://www.w3.org/2000/svg"
    xmlns:svg="http://www.w3.org/2000/svg">
   <defs
-     id="defs1" />
+     id="defs1">
+    <marker
+       style="overflow:visible"
+       id="ArrowWideRounded"
+       refX="0"
+       refY="0"
+       orient="auto-start-reverse"
+       markerWidth="5"
+       markerHeight="5"
+       viewBox="0 0 1 1"
+       preserveAspectRatio="xMidYMid"
+       markerUnits="userSpaceOnUse">
+      <path
+         style="fill:none;stroke:context-stroke;stroke-width:1;stroke-linecap:round"
+         d="M 3,-3 0,0 3,3"
+         transform="rotate(180,0.125,0)"
+         id="path15" />
+    </marker>
+  </defs>
   <g
      id="layer1"
      transform="translate(2.355005,2.355005)">
@@ -24,10 +42,10 @@
        ry="31.766254" />
     <g
        id="g10"
-       transform="translate(-3.3585154e-7,-10.977179)">
+       transform="translate(0,-7.9731246)">
       <g
          id="g2"
-         transform="matrix(0.8290948,0,0,0.8290948,48.086677,71.658616)">
+         transform="matrix(1.4657402,0,0,1.4657402,20.938009,5.8913818)">
         <rect
            style="opacity:1;fill:none;stroke:#ffffff;stroke-width:4.71001;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:6.3;stroke-dashoffset:6.05772;paint-order:markers fill stroke"
            id="rect1"
@@ -48,7 +66,7 @@
       </g>
       <g
          id="g9"
-         transform="matrix(0.86899273,0,0,0.78674779,-11.129928,-8.7470933)">
+         transform="matrix(1.0590233,0,0,1.0242092,-56.7839,-32.056956)">
         <rect
            style="opacity:1;fill:#000000;stroke:#000000;stroke-width:4.71001;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:6.3;stroke-dashoffset:6.05772;paint-order:markers fill stroke"
            id="rect2"
@@ -81,6 +99,23 @@
            ry="2.0276332"
            d="m 67.536941,151.39796 h 2.908678 c 1.123308,0 2.027633,0.90433 2.027633,2.02764 v 2.90868 c 0,1.1233 -0.904325,2.02763 -2.027633,2.02763 h -2.908678 c -1.123309,0 -2.027633,-0.90433 -2.027633,-2.02763 v -2.90868 c 0,-1.12331 0.904324,-2.02764 2.027633,-2.02764 z m 9.874361,0 h 2.908677 c 1.123309,0 2.027634,0.90433 2.027634,2.02764 v 2.90868 c 0,1.1233 -0.904325,2.02763 -2.027634,2.02763 h -2.908677 c -1.123309,0 -2.027633,-0.90433 -2.027633,-2.02763 v -2.90868 c 0,-1.12331 0.904324,-2.02764 2.027633,-2.02764 z m 9.87436,0 h 2.908678 c 1.123309,0 2.027633,0.90433 2.027633,2.02764 v 2.90868 c 0,1.1233 -0.904324,2.02763 -2.027633,2.02763 h -2.908678 c -1.123308,0 -2.027633,-0.90433 -2.027633,-2.02763 v -2.90868 c 0,-1.12331 0.904325,-2.02764 2.027633,-2.02764 z m 9.874361,0 h 2.908677 c 1.12331,0 2.02763,0.90433 2.02763,2.02764 v 2.90868 c 0,1.1233 -0.90432,2.02763 -2.02763,2.02763 h -2.908677 c -1.123309,0 -2.027633,-0.90433 -2.027633,-2.02763 v -2.90868 c 0,-1.12331 0.904324,-2.02764 2.027633,-2.02764 z m 9.874357,0 h 2.90868 c 1.12331,0 2.02763,0.90433 2.02763,2.02764 v 2.90868 c 0,1.1233 -0.90432,2.02763 -2.02763,2.02763 h -2.90868 c -1.1233,0 -2.02763,-0.90433 -2.02763,-2.02763 v -2.90868 c 0,-1.12331 0.90433,-2.02764 2.02763,-2.02764 z m 9.87436,0 h 2.90868 c 1.12331,0 2.02764,0.90433 2.02764,2.02764 v 2.90868 c 0,1.1233 -0.90433,2.02763 -2.02764,2.02763 h -2.90868 c -1.1233,0 -2.02763,-0.90433 -2.02763,-2.02763 v -2.90868 c 0,-1.12331 0.90433,-2.02764 2.02763,-2.02764 z m 9.87437,0 h 2.90867 c 1.12331,0 2.02764,0.90433 2.02764,2.02764 v 2.90868 c 0,1.1233 -0.90433,2.02763 -2.02764,2.02763 h -2.90867 c -1.12331,0 -2.02764,-0.90433 -2.02764,-2.02763 v -2.90868 c 0,-1.12331 0.90433,-2.02764 2.02764,-2.02764 z m 9.87436,0 h 2.90867 c 1.12331,0 2.02764,0.90433 2.02764,2.02764 v 2.90868 c 0,1.1233 -0.90433,2.02763 -2.02764,2.02763 h -2.90867 c -1.12331,0 -2.02764,-0.90433 -2.02764,-2.02763 v -2.90868 c 0,-1.12331 0.90433,-2.02764 2.02764,-2.02764 z"
            transform="translate(3.0069803,-52.10986)" />
+      </g>
+      <g
+         id="g16"
+         transform="matrix(1.2574559,0,0,1.2574559,-40.173273,-43.11032)">
+        <g
+           id="g15">
+          <circle
+             style="opacity:1;fill:#ffd300;stroke:none;stroke-width:4.71001;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:6.3;stroke-dashoffset:6.05772;paint-order:markers fill stroke"
+             id="path10"
+             cx="124.80022"
+             cy="136.20818"
+             r="31.239201" />
+        </g>
+        <path
+           style="opacity:1;fill:#000000;stroke:#000000;stroke-width:4.71;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:6.3;stroke-dasharray:none;stroke-dashoffset:6.05772;stroke-opacity:1;marker-end:url(#ArrowWideRounded);paint-order:markers fill stroke"
+           d="m 124.80022,114.37417 v 41.23747"
+           id="path11" />
       </g>
     </g>
   </g>
