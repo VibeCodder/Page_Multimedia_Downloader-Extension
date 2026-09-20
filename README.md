@@ -1,6 +1,6 @@
 # Page Multimedia Downloader
 As title suggest it's a browser extension that allows to download both images and videos.<br>
-for longer videos, you can move extension to a new browser tab by clicking `Open in tab`
+For longer videos, you can move extension to a new browser tab by clicking `Open in tab`
 
 <img width="752" height="752" alt="extension window" src="https://github.com/user-attachments/assets/bb7daa1c-57a0-40f3-88e6-faf681c47886" />
 
