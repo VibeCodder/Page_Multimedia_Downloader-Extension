@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Page Multimedia Downloader",
-  "version": "1.5.0",
-  "description": "Lists every image and video on the current page with a preview, dimensions, file size and format. Downloads plain files and streamed video alike.",
+  "name": "Page Image Finder",
+  "version": "1.6.0",
+  "description": "Lists every image and video on the current page with a preview, dimensions, file size and format. Downloads plain files and streamed video alike, from the page or from addresses you paste.",
   "action": {
     "default_popup": "popup.html",
     "default_title": "Find all images and videos on this page",

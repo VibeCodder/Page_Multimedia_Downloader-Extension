@@ -18,6 +18,12 @@ const typeMenu = document.getElementById('typeMenu');
 const typeSummary = document.getElementById('typeSummary');
 const typeBoxes = Array.from(typeMenu.querySelectorAll('input[type="checkbox"]'));
 const tabBtn = document.getElementById('tabBtn');
+const modeBtn = document.getElementById('modeBtn');
+const typeControl = document.getElementById('typeControl');
+const linkPanel = document.getElementById('linkPanel');
+const linkInput = document.getElementById('linkInput');
+const linkGoBtn = document.getElementById('linkGoBtn');
+const linkClearBtn = document.getElementById('linkClearBtn');
 const progressEl = document.getElementById('progress');
 const progressLabel = document.getElementById('progressLabel');
 const progressFill = document.getElementById('progressFill');
@@ -44,6 +50,7 @@ const KIND_LABELS = {
   'video-link': 'Link to a video',
   'video-meta': 'Social preview video',
   'video-stream': 'Streamed video',
+  'link': 'Pasted address',
   'video-network': 'Video loaded by the page'
 };
 
@@ -102,6 +109,7 @@ let bubbleMayBeOpen = false;
 let dismissingBubble = false;
 let activeJob = null;   // the download shown in the progress bar
 let scannedPage = '';   // which page was scanned (only shown when in a tab)
+let mode = 'standard';  // 'standard' reads the page, 'link' reads pasted addresses
 
 scanBtn.addEventListener('click', scan);
 sortSelect.addEventListener('change', onSortChange);
@@ -119,6 +127,13 @@ document.addEventListener('keydown', (e) => {
 });
 downloadSelectedBtn.addEventListener('click', downloadSelected);
 progressCancel.addEventListener('click', cancelJob);
+modeBtn.addEventListener('click', () => setMode(mode === 'link' ? 'standard' : 'link'));
+linkGoBtn.addEventListener('click', loadLinks);
+linkClearBtn.addEventListener('click', clearLinks);
+linkInput.addEventListener('input', rememberLinks);
+linkInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) loadLinks();
+});
 tabBtn.addEventListener('click', openInTab);
 tabBtn.hidden = !isPopupWindow();
 if (!isPopupWindow()) document.body.classList.add('in-tab');
@@ -129,6 +144,7 @@ window.addEventListener('pagehide', restoreDownloadUi);
 restoreDownloadUi();
 const sortReady = initSort();
 const typesReady = initTypes();
+initMode();
 updateSelectionUI();
 renderTypes();
 
@@ -572,6 +588,17 @@ async function processVideoEntry(entry) {
       entry.size = probe.size;
       const octet = !mime || mime === 'application/octet-stream' || mime === 'binary/octet-stream';
       confirmedVideo = mime.startsWith('video/') || (octet && videoExtOf(item.url) !== null);
+
+      // A playlist often has no telling extension; the server type gives it away.
+      const asStream = PIFStreams.streamKindFromType(mime);
+      if (asStream) {
+        item.stream = asStream;
+        return processStreamEntry(entry);
+      }
+      if (mime.startsWith('image/')) {
+        item.type = 'image';
+        return processEntry(entry);
+      }
     }
   }
 
@@ -584,6 +611,8 @@ async function processVideoEntry(entry) {
     entry.h = meta.h || item.h || 0;
     entry.duration = Number.isFinite(meta.duration) ? meta.duration : null;
   } else if (!confirmedVideo) {
+    // A pasted address may still be a playlist that announces nothing useful.
+    if (item.kind === 'link' && !item.stream) return processStreamEntry(entry);
     return false;
   } else {
     entry.w = item.w || 0;
@@ -897,6 +926,9 @@ function fillRow(entry, hasPreview, previewSrc) {
   entry.dlBtn.disabled = Boolean(entry.protected);
   if (entry.protected) entry.dlBtn.title = 'This stream is protected and cannot be saved.';
   // Videos cannot go on the clipboard, so they get a "Copy link" button (needs a real web address).
+  const copyLabel = isVideo(entry) ? 'Copy link' : 'Copy to clipboard';
+  entry.cpBtn.textContent = copyLabel;
+  entry.cpBtn.dataset.label = copyLabel;
   entry.cpBtn.disabled = isVideo(entry) && !/^https?:/i.test(entry.item.url);
   entry.pick.disabled = false;
   entry.ready = true;
@@ -1323,6 +1355,9 @@ function updateSelectionUI() {
   selectAll.indeterminate = selected.length > 0 && selected.length < ready.length;
 
   scanBtn.disabled = isBusy || isDownloading;
+  modeBtn.disabled = isBusy || isDownloading;
+  linkGoBtn.disabled = isBusy || isDownloading;
+  linkClearBtn.disabled = isBusy || isDownloading;
   downloadSelectedBtn.disabled = isBusy || isDownloading || selected.length === 0;
   if (isDownloading) {
     downloadSelectedBtn.textContent = 'Downloading…';
@@ -1442,6 +1477,10 @@ function scanLabel() {
 }
 
 function showIntro() {
+  if (mode === 'link') {
+    showEmpty('Nothing checked yet', 'Paste the addresses of videos, playlists or images above and press “Check links”.');
+    return;
+  }
   const what = dataTypes.length > 1 ? 'image and video' : dataTypes[0] === 'videos' ? 'video' : 'image';
   showEmpty('Nothing scanned yet', `Press “${scanLabel()}” to list every ${what} on the current page.`);
 }
@@ -1470,6 +1509,137 @@ function skippedNote(n) {
 
 function isVideo(entry) {
   return entry.item.type === 'video';
+}
+
+/* ==========================================================================
+   Link mode: work from addresses the user pastes instead of from the page
+   ========================================================================== */
+
+async function initMode() {
+  try {
+    const stored = await chrome.storage.local.get({ mode: 'standard', linkText: '' });
+    if (stored.mode === 'link') mode = 'link';
+    if (typeof stored.linkText === 'string') linkInput.value = stored.linkText;
+  } catch (_) { /* start in the standard mode */ }
+  applyMode();
+}
+
+function setMode(next) {
+  if (mode === next || isBusy || isDownloading) return;
+  mode = next;
+  chrome.storage.local.set({ mode }).catch(() => {});
+
+  scanToken++;            // forget whatever the other mode was still loading
+  currentEntries = [];
+  hasScanned = false;
+  resetList();
+  setTypeMenu(false);
+  setStatus(mode === 'link'
+    ? 'Paste the addresses of the files you want.'
+    : 'List every image or video the current tab uses.');
+  applyMode();
+  updateSelectionUI();
+  if (mode === 'link') linkInput.focus();
+}
+
+function applyMode() {
+  const link = mode === 'link';
+  linkPanel.hidden = !link;
+  scanBtn.hidden = link;
+  typeControl.hidden = link;
+  modeBtn.textContent = link ? 'Standard mode' : 'Link mode';
+  modeBtn.title = link
+    ? 'Go back to listing what the current page uses'
+    : 'Download from addresses you paste instead of from the current page';
+  if (!hasScanned) showIntro();
+}
+
+function rememberLinks() {
+  chrome.storage.local.set({ linkText: linkInput.value.slice(0, 20000) }).catch(() => {});
+}
+
+function clearLinks() {
+  linkInput.value = '';
+  rememberLinks();
+  linkInput.focus();
+}
+
+function parseLinks(text) {
+  const seen = new Set();
+  const out = [];
+  for (const piece of String(text).split(/\s+/)) {
+    const raw = piece.trim().replace(/^[<("']+/, '').replace(/[>)"',]+$/, '');
+    if (!raw) continue;
+    const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(raw);
+    // A bare word is prose, not an address; a host needs a dot.
+    if (!hasScheme && !/^[^/]+\.[^/.]{2,}/.test(raw)) continue;
+    let url;
+    try {
+      url = new URL(hasScheme ? raw : 'https://' + raw);
+    } catch (_) {
+      continue;
+    }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') continue;
+    if (seen.has(url.href)) continue;
+    seen.add(url.href);
+    out.push(url.href);
+  }
+  return out;
+}
+
+// An address alone says little, so the type is a first guess: anything that is
+// not clearly an image is treated as video and checked over the network.
+function linkItem(url) {
+  const stream = PIFStreams.streamKindFromUrl(url);
+  const item = { url, kind: 'link', type: !stream && formatFromUrl(url) ? 'image' : 'video', w: 0, h: 0 };
+  if (stream) item.stream = stream;
+  return item;
+}
+
+async function loadLinks() {
+  if (isBusy || isDownloading) return;
+
+  const urls = parseLinks(linkInput.value);
+  const token = ++scanToken;
+  hasScanned = true;
+  currentEntries = [];
+  resetList();
+
+  if (!urls.length) {
+    setStatus('No usable address found – each one needs to look like https://…', true);
+    showEmpty('Nothing to check', 'Paste one address per line, then press “Check links”.');
+    return;
+  }
+
+  setBusy(true);
+  setStatus(`Checking ${plural(urls.length, 'address')}…`);
+
+  const entries = urls.map((url, i) => createEntry(linkItem(url), i + 1));
+  currentEntries = entries;
+  const frag = document.createDocumentFragment();
+  entries.forEach((e) => frag.append(e.row));
+  listEl.replaceChildren(frag);
+
+  await runQueue(entries, token);
+  if (token !== scanToken) return;
+  await sortReady;
+  if (token !== scanToken) return;
+
+  const shown = entries.filter((e) => !e.removed);
+  const dropped = entries.length - shown.length;
+  const totalBytes = shown.reduce((sum, e) => sum + (e.size || 0), 0);
+
+  if (!shown.length) {
+    setStatus('None of these addresses could be read. They may be gone, private, or not a media file.', true);
+    showEmpty('Nothing could be loaded', 'Check the addresses and try again.');
+  } else {
+    const rough = shown.some((e) => e.sizeEstimated);
+    let msg = `${countsText(shown)} ready, ${rough ? '≈ ' : ''}${formatBytes(totalBytes)} in total.`;
+    if (dropped) msg += ` ${plural(dropped, 'address')} could not be read.`;
+    setStatus(msg);
+    applySort();
+  }
+  setBusy(false);
 }
 
 /* ==========================================================================
@@ -1623,5 +1793,6 @@ function formatDuration(sec) {
 }
 
 function plural(n, word) {
-  return `${n} ${word}${n === 1 ? '' : 's'}`;
+  if (n === 1) return `${n} ${word}`;
+  return `${n} ${word}${/(s|x|z|ch|sh)$/.test(word) ? 'es' : 's'}`;
 }
