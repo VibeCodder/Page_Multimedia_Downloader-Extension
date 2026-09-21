@@ -2,8 +2,7 @@
 As title suggest it's a browser extension that allows to download both images and videos.<br>
 For longer videos, you can move extension to a new browser tab by clicking `Open in tab`
 
-<img width="752" height="752" alt="extension window" src="https://github.com/user-attachments/assets/bb7daa1c-57a0-40f3-88e6-faf681c47886" />
+<img width="1920" height="1020" alt="extension screen -page with extension" src="https://github.com/user-attachments/assets/ebaf46a8-37d9-4c3b-a295-69ad51a6d5c2" />
 
 
-<img width="1920" height="1020" alt="page with extension" src="https://github.com/user-attachments/assets/71674686-65bb-46f5-94a1-c7a64b4c17dd" />
-
+<img width="752" height="752" alt="extension screen window" src="https://github.com/user-attachments/assets/b991358c-48d0-4cb0-856b-63050d9e7034" />
