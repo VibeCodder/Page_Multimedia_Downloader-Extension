@@ -46,14 +46,103 @@ var PIFStreams = (function () {
     return outer;
   }
 
-  async function fetchText(url, signal) {
-    const res = await fetch(url, { credentials: 'include', signal: signalFor(signal) });
+  /* ---- Page-context fetch bridge -----------------------------------------
+     A fetch made from the popup goes out as chrome-extension://… – no
+     Referer/Origin/cookies of the real page. Some CDNs sign playlist and
+     segment URLs against exactly those, and reject (403/412/404) a request
+     that doesn't carry them, even though the URL itself is still valid.
+
+     When a tabId is known (the scan that found this URL came from that
+     tab), these helpers run the actual fetch *inside* that tab via
+     chrome.scripting.executeScript, so it looks just like the page's own
+     player making the request. Every caller still falls back to a direct
+     fetch from the extension when no tabId is available (pasted links in
+     Link mode) or the bridge fails for any reason (tab closed, restricted
+     page, etc.), so behaviour for those cases is unchanged.
+     ------------------------------------------------------------------- */
+
+  // Runs inside the target page. Must be fully self-contained: no closures
+  // over anything outside this function, since chrome.scripting serialises
+  // it and executes it in the page's own world.
+  function __pifPageFetchText(url) {
+    return fetch(url, { credentials: 'include' }).then((res) =>
+      res.text().then((text) => ({
+        ok: res.ok, status: res.status,
+        type: res.headers.get('content-type') || '',
+        url: res.url, text
+      }))
+    ).catch((err) => ({ ok: false, status: 0, error: String((err && err.message) || err) }));
+  }
+
+  function __pifPageFetchBytes(url, offset, length) {
+    const init = { credentials: 'include' };
+    if (offset != null && length != null) {
+      init.headers = { Range: 'bytes=' + offset + '-' + (offset + length - 1) };
+    }
+    return fetch(url, init).then((res) =>
+      res.arrayBuffer().then((buf) => {
+        const bytes = new Uint8Array(buf);
+        let binary = '';
+        const chunk = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunk) {
+          binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+        }
+        return { ok: res.ok, status: res.status, url: res.url, data: btoa(binary) };
+      })
+    ).catch((err) => ({ ok: false, status: 0, error: String((err && err.message) || err) }));
+  }
+
+  function __pifPageFetchHead(url) {
+    return fetch(url, { method: 'HEAD', credentials: 'include' }).then((res) => ({
+      ok: res.ok, status: res.status, url: res.url,
+      contentLength: res.headers.get('content-length')
+    })).catch((err) => ({ ok: false, status: 0, error: String((err && err.message) || err) }));
+  }
+
+  const PAGE_FETCH_FUNCS = { text: __pifPageFetchText, bytes: __pifPageFetchBytes, head: __pifPageFetchHead };
+
+  // Resolves to null (never rejects) whenever the bridge can't be used, so
+  // callers always have a direct-fetch fallback to drop back to.
+  async function pageFetch(kind, ctx, args) {
+    const tabId = ctx && ctx.tabId;
+    if (tabId == null || typeof chrome === 'undefined' || !chrome.scripting) return null;
+    try {
+      const target = { tabId };
+      if (ctx.frameId != null) target.frameIds = [ctx.frameId];
+      const [result] = await chrome.scripting.executeScript({ target, func: PAGE_FETCH_FUNCS[kind], args });
+      return (result && result.result) || null;
+    } catch (_) {
+      return null; // tab closed, restricted page (chrome://…), frame gone, etc.
+    }
+  }
+
+  function base64ToBuf(b64) {
+    const binary = atob(b64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes.buffer;
+  }
+
+  async function fetchText(url, ctx) {
+    const bridged = await pageFetch('text', ctx, [url]);
+    if (bridged && bridged.status !== 0) {
+      if (!bridged.ok) throw new Error(`HTTP ${bridged.status}`);
+      return { text: bridged.text || '', type: bridged.type || '', url: bridged.url || url };
+    }
+    const res = await fetch(url, { credentials: 'include', signal: signalFor(ctx && ctx.signal) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return { text: await res.text(), type: res.headers.get('content-type') || '', url: res.url || url };
   }
 
-  async function fetchBytes(url, range, signal) {
-    const init = { credentials: 'include', signal: signalFor(signal) };
+  async function fetchBytes(url, range, ctx) {
+    const bridged = await pageFetch('bytes', ctx, [url, range ? range.offset : null, range ? range.length : null]);
+    if (bridged && bridged.status !== 0) {
+      if (!bridged.ok) throw new Error(`HTTP ${bridged.status}`);
+      const buf = bridged.data ? base64ToBuf(bridged.data) : new ArrayBuffer(0);
+      if (range && buf.byteLength > range.length) return buf.slice(range.offset, range.offset + range.length);
+      return buf;
+    }
+    const init = { credentials: 'include', signal: signalFor(ctx && ctx.signal) };
     if (range) init.headers = { Range: `bytes=${range.offset}-${range.offset + range.length - 1}` };
     const res = await fetch(url, init);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -214,8 +303,8 @@ var PIFStreams = (function () {
     return { type: 'media', segments, duration, live, init, targetDuration };
   }
 
-  async function resolveHls(url, signal) {
-    const first = await fetchText(url, signal);
+  async function resolveHls(url, ctx) {
+    const first = await fetchText(url, ctx);
     const parsed = parseM3u8(first.text, first.url);
 
     let mediaUrl = first.url;
@@ -234,7 +323,7 @@ var PIFStreams = (function () {
       const rendition = variant.audioGroup ? parsed.audio.get(variant.audioGroup) : null;
       audioSeparate = Boolean(rendition && rendition.url && rendition.url !== variant.url);
       mediaUrl = variant.url;
-      const media = await fetchText(mediaUrl, signal);
+      const media = await fetchText(mediaUrl, ctx);
       const inner = parseM3u8(media.text, media.url);
       if (inner.type !== 'media') throw new Error('This playlist points at another playlist.');
       return buildHlsPlan(url, inner, variant, audioSeparate);
@@ -328,8 +417,8 @@ var PIFStreams = (function () {
     return { offset, length: end - offset + 1 };
   }
 
-  async function resolveDash(url, signal) {
-    const res = await fetchText(url, signal);
+  async function resolveDash(url, ctx) {
+    const res = await fetchText(url, ctx);
     const doc = new DOMParser().parseFromString(res.text, 'application/xml');
     const mpd = doc.documentElement;
     if (!mpd || /parsererror/i.test(mpd.nodeName)) throw new Error('This manifest could not be read.');
@@ -504,10 +593,10 @@ var PIFStreams = (function () {
 
   const keyCache = new Map();
 
-  async function keyFor(url, signal) {
+  async function keyFor(url, ctx) {
     if (keyCache.has(url)) return keyCache.get(url);
     const promise = (async () => {
-      const raw = await fetchBytes(url, null, signal);
+      const raw = await fetchBytes(url, null, ctx);
       if (raw.byteLength !== 16) throw new Error('Unexpected key length.');
       return crypto.subtle.importKey('raw', raw, 'AES-CBC', false, ['decrypt']);
     })();
@@ -515,11 +604,11 @@ var PIFStreams = (function () {
     return promise;
   }
 
-  async function fetchSegment(segment, signal) {
-    let buf = await fetchBytes(segment.url, segment.range, signal);
+  async function fetchSegment(segment, ctx) {
+    let buf = await fetchBytes(segment.url, segment.range, ctx);
     if (segment.key && segment.key.method === 'AES-128') {
       if (!segment.key.url) throw new Error('This stream is encrypted but gives no key.');
-      const key = await keyFor(segment.key.url, signal);
+      const key = await keyFor(segment.key.url, ctx);
       const iv = segment.key.iv || sequenceIv(segment.seq);
       buf = await crypto.subtle.decrypt({ name: 'AES-CBC', iv }, key, buf);
     }
@@ -528,7 +617,7 @@ var PIFStreams = (function () {
 
   // A playlist that carries no bitrate leaves the file size unknown; one look
   // at the first segment is enough for a rough figure.
-  async function estimateSize(plan, signal) {
+  async function estimateSize(plan, ctx) {
     if (plan.estBytes || !plan.segments.length) return plan;
     const first = plan.segments[0];
     if (first.range) {
@@ -536,40 +625,49 @@ var PIFStreams = (function () {
       return plan;
     }
     try {
-      const res = await fetch(first.url, {
-        method: 'HEAD', credentials: 'include', signal: signalFor(signal)
-      });
-      const len = Number(res.headers.get('content-length'));
-      if (res.ok && Number.isFinite(len) && len > 0) plan.estBytes = len * plan.segments.length;
+      const bridged = await pageFetch('head', ctx, [first.url]);
+      let len = null;
+      if (bridged && bridged.status !== 0) {
+        if (bridged.ok) len = Number(bridged.contentLength);
+      } else {
+        const res = await fetch(first.url, {
+          method: 'HEAD', credentials: 'include', signal: signalFor(ctx && ctx.signal)
+        });
+        if (res.ok) len = Number(res.headers.get('content-length'));
+      }
+      if (Number.isFinite(len) && len > 0) plan.estBytes = len * plan.segments.length;
     } catch (_) { /* size stays unknown */ }
     return plan;
   }
 
   // Resolve a playlist URL into a plan: what the video is and how to fetch it.
+  // options.tabId/frameId (when known) route the network calls above through
+  // the page itself instead of the extension — see the fetch bridge notes up top.
   async function probe(url, options = {}) {
     const kind = options.kind || streamKindFromUrl(url);
-    const signal = options.signal;
-    if (kind === 'dash') return estimateSize(await resolveDash(url, signal), signal);
-    if (kind === 'hls') return estimateSize(await resolveHls(url, signal), signal);
+    const ctx = { signal: options.signal, tabId: options.tabId, frameId: options.frameId };
+    if (kind === 'dash') return estimateSize(await resolveDash(url, ctx), ctx);
+    if (kind === 'hls') return estimateSize(await resolveHls(url, ctx), ctx);
 
     // No extension: look at what the server sends back.
-    const head = await fetchText(url, signal);
+    const head = await fetchText(url, ctx);
     const byType = streamKindFromType(head.type);
     if (byType === 'dash' || /<MPD[\s>]/i.test(head.text.slice(0, 2000))) {
       const doc = new DOMParser().parseFromString(head.text, 'application/xml');
-      if (doc.documentElement && /MPD/i.test(doc.documentElement.nodeName)) return resolveDash(head.url, signal);
+      if (doc.documentElement && /MPD/i.test(doc.documentElement.nodeName)) return resolveDash(head.url, ctx);
     }
     if (byType === 'hls' || head.text.trimStart().startsWith('#EXTM3U')) {
       const parsed = parseM3u8(head.text, head.url);
-      if (parsed.type === 'master') return estimateSize(await resolveHls(head.url, signal), signal);
-      return estimateSize(buildHlsPlan(url, parsed, null, false), signal);
+      if (parsed.type === 'master') return estimateSize(await resolveHls(head.url, ctx), ctx);
+      return estimateSize(buildHlsPlan(url, parsed, null, false), ctx);
     }
     throw new Error('This address is not a stream playlist.');
   }
 
   // Fetch every segment and join them into one file.
   async function download(plan, options = {}) {
-    const { onProgress, signal } = options;
+    const { onProgress, signal, tabId, frameId } = options;
+    const ctx = { signal, tabId, frameId };
     const total = plan.segments.length;
     const parts = new Array(total);
     let bytes = 0;
@@ -592,7 +690,7 @@ var PIFStreams = (function () {
 
     let initPart = null;
     if (plan.init) {
-      const buf = await fetchBytes(plan.init.url, plan.init.range, signal);
+      const buf = await fetchBytes(plan.init.url, plan.init.range, ctx);
       initPart = buf;
       initBytes = buf.byteLength;
       bytes += initBytes;
@@ -606,7 +704,7 @@ var PIFStreams = (function () {
         if (signal && signal.aborted) throw abortError();
         const index = next++;
         try {
-          const buf = await fetchSegment(plan.segments[index], signal);
+          const buf = await fetchSegment(plan.segments[index], ctx);
           parts[index] = buf;
           bytes += buf.byteLength;
         } catch (err) {

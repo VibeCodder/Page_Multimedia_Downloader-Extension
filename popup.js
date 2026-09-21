@@ -297,11 +297,15 @@ async function runQueue(entries, token) {
    ========================================================================== */
 
 async function pageCollector(opts) {
+  const DEBUG = true; // TEMP: flip to false once the issue is found
+  const dlog = (...a) => { if (DEBUG) console.log('[PIF collector]', ...a); };
+
   const wantImages = !opts || opts.images !== false;
   const wantVideos = Boolean(opts && opts.videos);
   const found = new Map();
   let blobSkipped = 0;            // blob: videos that could not be read (Media Source streams)
   const base = document.baseURI;
+  dlog('start', { url: location.href, wantImages, wantVideos });
 
   const STREAM_RE = /\.(m3u8|m3u|mpd)(?:$|[?#])/i;
   const VIDEO_URL_RE = /\.(mp4|m4v|webm|ogv|ogg|mov|mkv|avi|mpe?g|3gp|flv|wmv)(?:$|[?#])/i;
@@ -421,19 +425,60 @@ async function pageCollector(opts) {
   };
 
   visit(document);
+  dlog('after DOM visit, found so far', found.size, [...found.values()].filter(v => v.type === 'video'));
 
   // Players load their playlists over the network, so they never appear in the
   // page markup. Resource timing still remembers every address the page used.
   if (wantVideos) {
     try {
-      for (const e of performance.getEntriesByType('resource')) {
+      const entries = performance.getEntriesByType('resource');
+      const initiatorTally = {};
+      let streamHits = 0, videoNetworkHits = 0;
+      for (const e of entries) {
         const name = e.name || '';
-        if (STREAM_RE.test(name)) addVideo(name, 'video-stream');
+        initiatorTally[e.initiatorType] = (initiatorTally[e.initiatorType] || 0) + 1;
+        if (STREAM_RE.test(name)) { addVideo(name, 'video-stream'); streamHits++; }
         else if (VIDEO_URL_RE.test(name) && (e.initiatorType === 'video' || e.initiatorType === 'media')) {
           addVideo(name, 'video-network');
+          videoNetworkHits++;
         }
       }
-    } catch (_) { /* resource timing not available */ }
+      dlog('performance.getEntriesByType("resource")', {
+        totalEntries: entries.length,
+        streamHits,
+        videoNetworkHits,
+        initiatorTally,
+        // If a request looks like a video/segment file but was tagged as
+        // fetch/xhr/other (not "video"/"media"), it gets skipped by the
+        // branch above on purpose and has to be caught by watch.js instead.
+        videoLikeButWrongInitiator: entries
+          .filter(e => VIDEO_URL_RE.test(e.name || '') && e.initiatorType !== 'video' && e.initiatorType !== 'media')
+          .map(e => ({ url: e.name, initiatorType: e.initiatorType }))
+      });
+    } catch (err) { dlog('performance API failed', err); }
+
+    // Belt and braces: watch.js (a content script that runs from the very
+    // start of the page) records every fetch()/XHR request matching a video
+    // or playlist address on its own. This catches two cases Resource Timing
+    // alone misses: ad-heavy pages that fill its 250-entry buffer before this
+    // scan ever runs, and players that load segments with fetch()/XHR, which
+    // Resource Timing tags as initiatorType "fetch"/"xmlhttprequest" rather
+    // than "video"/"media".
+    try {
+      const watched = window.__pifNetworkVideos;
+      dlog('window.__pifNetworkVideos present?', Boolean(watched), watched ? watched.size : 0,
+        watched ? [...watched.values()] : null);
+      if (watched) {
+        for (const rec of watched.values()) {
+          addVideo(rec.url, rec.stream ? 'video-stream' : 'video-network');
+        }
+      } else {
+        dlog('watch.js store missing entirely - either watch.js did not run in this frame, ' +
+          'or it ran in a different execution world than this scan.');
+      }
+    } catch (err) { dlog('reading __pifNetworkVideos failed', err); }
+
+    dlog('after network scan, video entries now', [...found.values()].filter(v => v.type === 'video'));
   }
 
   // Inline <svg> elements -> standalone SVG data URLs
@@ -478,8 +523,9 @@ async function pageCollector(opts) {
   // data URLs; larger videos stay here and are handed over in chunks when the
   // user actually downloads them, so their size does not matter.
   const store = window.__pifBlobs || (window.__pifBlobs = new Map());
-  for (const [key, item] of Array.from(found)) {
-    if (!key.startsWith('blob:')) continue;
+  const blobKeys = Array.from(found).filter(([key]) => key.startsWith('blob:'));
+  dlog('blob: URLs to resolve', blobKeys.map(([key, item]) => ({ key, kind: item.kind, type: item.type })));
+  for (const [key, item] of blobKeys) {
     const isVideo = item.type === 'video';
     try {
       const blob = await (await fetch(key)).blob();
@@ -489,6 +535,7 @@ async function pageCollector(opts) {
         item.viaPage = true;
         item.blobSize = blob.size;
         item.blobMime = blob.type || '';
+        dlog('blob resolved (large, kept as-is)', key, blob.size, blob.type);
         continue;
       }
       if (!isVideo && blob.size > 25e6) throw new Error('too large');
@@ -498,14 +545,21 @@ async function pageCollector(opts) {
         fr.onerror = () => reject(fr.error);
         fr.readAsDataURL(blob);
       });
-    } catch (_) {
-      // Videos played through Media Source Extensions have no readable blob;
-      // the playlist behind them is usually picked up separately.
+      dlog('blob resolved (inlined as data URL)', key, blob.size, blob.type);
+    } catch (err) {
+      // Videos played through Media Source Extensions have no readable blob
+      // (this is the expected/normal case, not a bug); the playlist or
+      // segments behind them should be picked up separately via the network scan above.
+      dlog('blob could NOT be read - dropping this entry. This is EXPECTED for MSE-based ' +
+        'players (like most streaming video sites); the real video should already have been ' +
+        'added above as video-stream / video-network. If it was not, that is the real bug.',
+        key, item.kind, String(err));
       found.delete(key);
       if (isVideo) blobSkipped++;
     }
   }
 
+  dlog('FINAL result', { totalItems: found.size, blobSkipped, videos: [...found.values()].filter(v => v.type === 'video') });
   return { items: Array.from(found.values()), skipped: blobSkipped };
 }
 
@@ -582,7 +636,7 @@ async function processVideoEntry(entry) {
     src = entry.objectUrl;
     confirmedVideo = true;
   } else {
-    const probe = await probeRemote(item.url);
+    const probe = await probeRemote(item.url, item.tabId, item.frameId);
     if (probe) {
       mime = probe.type;
       entry.size = probe.size;
@@ -629,7 +683,7 @@ async function processStreamEntry(entry) {
   const { item } = entry;
   let plan;
   try {
-    plan = await PIFStreams.probe(item.url, { kind: item.stream });
+    plan = await PIFStreams.probe(item.url, { kind: item.stream, tabId: item.tabId, frameId: item.frameId });
   } catch (err) {
     entry.streamError = err.message;
     return false;
@@ -653,17 +707,17 @@ async function processStreamEntry(entry) {
   if (plan.live) notes.push('live stream, only the part available now');
   entry.details = notes.join(' · ');
 
-  const preview = await streamPreview(plan);
+  const preview = await streamPreview(plan, item.tabId, item.frameId);
   fillRow(entry, Boolean(preview), preview);
   return true;
 }
 
 // Builds a short playable piece (init + first segment) just for the thumbnail.
-async function streamPreview(plan) {
+async function streamPreview(plan, tabId, frameId) {
   if (plan.container !== 'mp4' || !plan.init || !plan.segments.length) return null;
   try {
     const head = { ...plan, segments: plan.segments.slice(0, 1) };
-    const { blob } = await PIFStreams.download(head, {});
+    const { blob } = await PIFStreams.download(head, { tabId, frameId });
     if (!blob.size || blob.size > 12e6) return null;
     const url = URL.createObjectURL(blob);
     objectUrls.push(url);
@@ -687,7 +741,49 @@ async function processPageBlobEntry(entry) {
   return true;
 }
 
-async function probeRemote(url) {
+// Runs inside the target page, so the request carries the page's own
+// Referer/Origin/cookies instead of the extension's — some CDNs 403/404 a
+// signed file URL otherwise, even though the URL itself is still valid.
+// Must be fully self-contained: chrome.scripting serialises this function
+// and runs it in the page's own world, so it cannot close over anything
+// outside itself.
+function __pifPageProbeFile(url) {
+  const attempts = ['head', 'range'];
+  const tryOne = (i) => {
+    if (i >= attempts.length) return null;
+    const attempt = attempts[i];
+    const init = { credentials: 'include' };
+    if (attempt === 'head') init.method = 'HEAD';
+    else init.headers = { Range: 'bytes=0-0' };
+    return fetch(url, init).then((res) => {
+      if (!res.ok) return tryOne(i + 1);
+      const type = (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+      let size = null;
+      const total = /\/(\d+)\s*$/.exec(res.headers.get('content-range') || '');
+      if (total) size = Number(total[1]);
+      else if (res.status !== 206 && res.headers.has('content-length')) {
+        const len = Number(res.headers.get('content-length'));
+        if (Number.isFinite(len)) size = len;
+      }
+      if (res.body) res.body.cancel().catch(() => {});
+      return { type, size };
+    }).catch(() => tryOne(i + 1));
+  };
+  return Promise.resolve(tryOne(0));
+}
+
+async function probeRemote(url, tabId, frameId) {
+  if (tabId != null && chrome.scripting) {
+    try {
+      const target = { tabId };
+      if (frameId != null) target.frameIds = [frameId];
+      const [result] = await chrome.scripting.executeScript({
+        target, func: __pifPageProbeFile, args: [url]
+      });
+      if (result && result.result) return result.result;
+    } catch (_) { /* tab closed, restricted page, etc. — fall back below */ }
+  }
+
   for (const attempt of ['head', 'range']) {
     try {
       const init = { credentials: 'include', signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) };
@@ -1020,6 +1116,8 @@ async function saveStream(entry, btn) {
 
   const { blob, failed } = await PIFStreams.download(entry.plan, {
     signal: job.controller.signal,
+    tabId: entry.item.tabId,
+    frameId: entry.item.frameId,
     onProgress: (p) => updateProgress({
       bytes: p.bytes,
       total: p.estTotal,

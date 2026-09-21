@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Page Image Finder",
+  "name": "Page Multimedia Downloader",
   "version": "1.6.0",
   "description": "Lists every image and video on the current page with a preview, dimensions, file size and format. Downloads plain files and streamed video alike, from the page or from addresses you paste.",
   "action": {
@@ -20,5 +20,14 @@
     "128": "icons/icon128.png"
   },
   "permissions": ["scripting", "downloads", "downloads.ui", "clipboardWrite", "storage"],
-  "host_permissions": ["<all_urls>"]
+  "host_permissions": ["<all_urls>"],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["watch.js"],
+      "all_frames": true,
+      "match_about_blank": true,
+      "run_at": "document_start"
+    }
+  ]
 }
