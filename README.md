@@ -1,5 +1,5 @@
 # Page Multimedia Downloader
-As title suggest it's a browser extension that allows to download both images and videos.<br>
+As title suggest it's a browser extension created with Claude that allows to download both images and videos.<br>
 For longer videos, you can move extension to a new browser tab by clicking `Open in tab`
 
 <img width="1920" height="1020" alt="extension screen -page with extension" src="https://github.com/user-attachments/assets/ebaf46a8-37d9-4c3b-a295-69ad51a6d5c2" />
