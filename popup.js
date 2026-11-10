@@ -93,8 +93,8 @@ const VIDEO_MIME_FORMAT = {
 
 const SORT_MODES = ['page', 'res-desc', 'res-asc', 'size-desc', 'size-asc'];
 
-const DATA_TYPES = ['images', 'videos'];
-const TYPE_LABELS = { images: 'Images', videos: 'Videos' };
+const DATA_TYPES = ['images', 'videos', 'gif'];
+const TYPE_LABELS = { images: 'Images', videos: 'Videos', gif: 'GIF' };
 
 let scanToken = 0;
 let objectUrls = [];
@@ -198,10 +198,13 @@ async function scan() {
   if (token !== scanToken) return;
 
   const shown = entries.filter((e) => !e.removed);
-  const dropped = entries.length - shown.length;
+  const dropped = entries.filter((e) => e.removed && !e.filtered).length;
   const totalBytes = shown.reduce((sum, e) => sum + (e.size || 0), 0);
 
-  if (!shown.length) {
+  if (!shown.length && !dropped) {
+    setStatus(`No ${noun} found on this page.` + (skipped ? ' ' + skippedNote(skipped) : ''));
+    showEmpty(`No ${noun} found`, skipped ? skippedNote(skipped) : `This page does not seem to use any ${noun}.`);
+  } else if (!shown.length) {
     setStatus(`No ${noun} could be loaded from this page.`);
     showEmpty(`No ${noun} could be loaded`, skipped ? skippedNote(skipped) : `The site may block access to its ${noun}.`);
   } else {
@@ -221,12 +224,17 @@ async function collectFromTab(types) {
   if (!tab || tab.id === undefined) throw new Error('No page to scan was found.');
   scannedPage = isPopupWindow() ? '' : (tab.title || tab.url || '');
 
+  const gifOnly = isGifOnly(types);
   let results;
   try {
     results = await chrome.scripting.executeScript({
       target: { tabId: tab.id, allFrames: true },
       func: pageCollector,
-      args: [{ images: types.includes('images'), videos: types.includes('videos') }]
+      args: [{
+        images: types.includes('images') || types.includes('gif'),
+        videos: types.includes('videos'),
+        gifOnly
+      }]
     });
   } catch (err) {
     throw new Error(
@@ -244,6 +252,7 @@ async function collectFromTab(types) {
       if (merged.has(it.url)) continue;
       it.tabId = tab.id;
       it.frameId = r.frameId || 0;
+      if (gifOnly && it.type !== 'video') it.gifOnly = true; // only GIF files are kept after the format check
       merged.set(it.url, it);
     }
   }
@@ -285,7 +294,9 @@ async function runQueue(entries, token) {
         entry.removed = true;
         entry.row.remove();
       }
-      setStatus(`Found ${countsText(entries)}. Reading details… ${finished} of ${total}`);
+      setStatus(entries[0].item.gifOnly
+        ? `Checking ${plural(total, 'image')} for GIFs… ${finished} of ${total}`
+        : `Found ${countsText(entries)}. Reading details… ${finished} of ${total}`);
     }
   };
 
@@ -302,6 +313,7 @@ async function pageCollector(opts) {
 
   const wantImages = !opts || opts.images !== false;
   const wantVideos = Boolean(opts && opts.videos);
+  const gifOnly = Boolean(opts && opts.gifOnly); // GIF files only: no SVG / canvas snapshots
   const found = new Map();
   let blobSkipped = 0;            // blob: videos that could not be read (Media Source streams)
   const base = document.baseURI;
@@ -402,9 +414,9 @@ async function pageCollector(opts) {
           if (href && (VIDEO_URL_RE.test(href) || STREAM_RE.test(href))) addVideo(href, 'video-link');
         }
       } else if (tag === 'canvas') {
-        if (wantImages) canvases.push(el);
+        if (wantImages && !gifOnly) canvases.push(el);
       } else if (tag === 'svg') {
-        if (wantImages && !(el.parentElement && el.parentElement.closest('svg'))) svgRoots.push(el);
+        if (wantImages && !gifOnly && !(el.parentElement && el.parentElement.closest('svg'))) svgRoots.push(el);
       }
 
       if (wantImages) {
@@ -585,6 +597,7 @@ async function processEntry(entry) {
   if (blob) {
     if (blob.size === 0) return false;
     entry.format = await sniffFormat(blob, item.url);
+    if (item.gifOnly && entry.format !== 'GIF') { entry.filtered = true; return false; }
     entry.blob = new Blob([blob], { type: MIME[entry.format] || blob.type });
     entry.size = blob.size;
     entry.objectUrl = URL.createObjectURL(entry.blob);
@@ -592,6 +605,7 @@ async function processEntry(entry) {
     previewSrc = entry.objectUrl;
   } else {
     entry.format = formatFromUrl(item.url);
+    if (item.gifOnly && entry.format !== 'GIF') { entry.filtered = true; return false; }
   }
 
   let img = null;
@@ -1569,9 +1583,21 @@ function setTypeMenu(open) {
   typeBtn.setAttribute('aria-expanded', String(open));
 }
 
+// "Images" already includes GIF files, so GIF only matters on its own.
+function effectiveTypes(types) {
+  return types.includes('images') ? types.filter((t) => t !== 'gif') : types;
+}
+
+// GIF selected without Images: the list is narrowed to GIF files.
+function isGifOnly(types) {
+  return types.includes('gif') && !types.includes('images');
+}
+
 function scanLabel() {
-  if (dataTypes.length > 1) return 'Find media';
-  return dataTypes[0] === 'videos' ? 'Find videos' : 'Find images';
+  const types = effectiveTypes(dataTypes);
+  if (types.length > 1) return 'Find media';
+  if (types[0] === 'videos') return 'Find videos';
+  return types[0] === 'gif' ? 'Find GIFs' : 'Find images';
 }
 
 function showIntro() {
@@ -1579,23 +1605,31 @@ function showIntro() {
     showEmpty('Nothing checked yet', 'Paste the addresses of videos, playlists or images above and press “Check links”.');
     return;
   }
-  const what = dataTypes.length > 1 ? 'image and video' : dataTypes[0] === 'videos' ? 'video' : 'image';
+  const types = effectiveTypes(dataTypes);
+  const what = types.length > 1
+    ? (types.includes('gif') ? 'GIF and video' : 'image and video')
+    : types[0] === 'videos' ? 'video' : types[0] === 'gif' ? 'GIF' : 'image';
   showEmpty('Nothing scanned yet', `Press “${scanLabel()}” to list every ${what} on the current page.`);
 }
 
 function mediaNoun(types) {
-  if (types.length > 1) return 'images or videos';
-  return types[0] === 'videos' ? 'videos' : 'images';
+  const eff = effectiveTypes(types);
+  if (eff.length > 1) return eff.includes('gif') ? 'GIFs or videos' : 'images or videos';
+  if (eff[0] === 'videos') return 'videos';
+  return eff[0] === 'gif' ? 'GIFs' : 'images';
 }
 
 function countsText(entries) {
   let images = 0;
+  let gifs = 0;
   let videos = 0;
   for (const e of entries) {
     if (isVideo(e)) videos++;
+    else if (e.item.gifOnly) gifs++;
     else images++;
   }
   const parts = [];
+  if (gifs) parts.push(plural(gifs, 'GIF'));
   if (images) parts.push(plural(images, 'image'));
   if (videos) parts.push(plural(videos, 'video'));
   return parts.join(' and ');
